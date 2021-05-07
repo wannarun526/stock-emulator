@@ -25,7 +25,7 @@
     
         return Math.round( (total / day) * 100) / 100;
     }
-    
+
 
     // 爬取上市股票數據
     const requestTwe = async (date) => {
@@ -104,80 +104,143 @@
     }
 
     // 整理各股資料
-    const freshSMA = async() =>{
-        // 找stockList
-        const dbStockList = await stockListCol.find().toArray()
-        // 找stocks
-        const dbStocks = await stocksCol.find().toArray();
+    const freshSMA = async(targetObj) =>{
+        if(targetObj.TWE){
+            // 找stockList
+            const dbStockList = await stockListCol.find().toArray()
+            // 找stocks
+            const dbStocks = await stocksCol.find().toArray();
 
-        for(var row of dbStockList){
-            const stockAllDate = dbStocks.filter((item)=> item.code === row.code && item.name === row.name);
-            stockAllDate.sort((a, b) => a.date > b.date ? 1 : (a.date < b.date ? -1 : 0))
-            console.log(row.name + " start")
-            var ystSma5;
-            var ystSma10;
-            var ystSma20;
-            var ystAllBuyCond;
-            for(var key in stockAllDate){
-                const todayData = stockAllDate[key];
-                const query = {_id: todayData['_id']}
-                var sma5 = null;
-                var sma10 = null;
-                var sma20 = null;
-                var sma60 = null;
-                var sma120 = null;
-                var sma240 = null;
-                var buyCond1 = null;
-                var buyCond2 = null;
-                var buyCond3 = null;
-                var buyCond4 = null;
-                if (key >= 4)
-                    sma5 = calSMA(stockAllDate, key, 5)
-                if(key >= 9)
-                    sma10 = calSMA(stockAllDate, key, 10)
-                if(key >= 19){
-                    sma20 = calSMA(stockAllDate, key, 20)
+            for(var row of dbStockList){
+                const stockAllDate = dbStocks.filter((item)=> item.code === row.code && item.name === row.name);
+                stockAllDate.sort((a, b) => a.date > b.date ? 1 : (a.date < b.date ? -1 : 0))
+                console.log(row.name + " start")
+                var ystSma5;
+                var ystSma10;
+                var ystSma20;
+                var ystAllBuyCond;
+                for(var key in stockAllDate){
+                    const todayData = stockAllDate[key];
+                    const query = {_id: todayData['_id']}
+                    var sma5 = null;
+                    var sma10 = null;
+                    var sma20 = null;
+                    var sma60 = null;
+                    var sma120 = null;
+                    var sma240 = null;
+                    var buyCond1 = null;
+                    var buyCond2 = null;
+                    var buyCond3 = null;
+                    var buyCond4 = null;
+                    if (key >= 4)
+                        sma5 = calSMA(stockAllDate, key, 5)
+                    if(key >= 9)
+                        sma10 = calSMA(stockAllDate, key, 10)
+                    if(key >= 19){
+                        sma20 = calSMA(stockAllDate, key, 20)
 
-                    // 條件1 收盤價大於5日, 10日, 20日均
-                    buyCond1 = todayData['close'] >= sma5 && todayData['close'] >= sma10 && todayData['close'] >= sma20;
-                    // 條件2 5日, 10日, 20日均線向上
-                    buyCond2 = sma5 >= ystSma5 && sma10 >= ystSma10 && sma20 >= ystSma20;
-                    // 條件3 收盤價大於月線未來10日扣抵值
-                    const maxSma20 = [];
-                    for(var i=10; i < 20; i++){
-                        maxSma20.push(stockAllDate[key - i]['close'])
+                        // 條件1 收盤價大於5日, 10日, 20日均
+                        buyCond1 = todayData['close'] >= sma5 && todayData['close'] >= sma10 && todayData['close'] >= sma20;
+                        // 條件2 5日, 10日, 20日均線向上
+                        buyCond2 = sma5 >= ystSma5 && sma10 >= ystSma10 && sma20 >= ystSma20;
+                        // 條件3 收盤價大於月線未來10日扣抵值
+                        const maxSma20 = [];
+                        for(var i=10; i < 20; i++){
+                            maxSma20.push(stockAllDate[key - i]['close'])
+                        }
+                        buyCond3 = todayData['close'] > Math.max(...maxSma20)
+                        // 條件4 昨日前三條件不符合且今日符合
+                        buyCond4 = !ystAllBuyCond && (buyCond1 && buyCond2 && buyCond3)
                     }
-                    buyCond3 = todayData['close'] > Math.max(...maxSma20)
-                    // 條件4 昨日前三條件不符合且今日符合
-                    buyCond4 = !ystAllBuyCond && (buyCond1 && buyCond2 && buyCond3)
+                    if(key >= 59)
+                        sma60 = calSMA(stockAllDate, key, 60)
+                    if(key >= 119)
+                        sma120 = calSMA(stockAllDate, key, 120)
+                    if(key >= 239)
+                        sma240 = calSMA(stockAllDate, key, 240)
+                    
+                    ystSma5 = sma5;
+                    ystSma10 = sma10;
+                    ystSma20 = sma20;
+                    ystAllBuyCond = buyCond1 && buyCond2 && buyCond3;
+                    await stocksCol.updateOne(query, 
+                        { $set: { 
+                            sma5: sma5, 
+                            sma10: sma10, 
+                            sma20: sma20, 
+                            sma60: sma60, 
+                            sma120: sma120, 
+                            sma240: sma240,
+                            buyCond1: buyCond1,
+                            buyCond2: buyCond2,
+                            buyCond3: buyCond3,
+                            buyCond4: buyCond4,
+                        }})
+                    
                 }
-                if(key >= 59)
-                    sma60 = calSMA(stockAllDate, key, 60)
-                if(key >= 119)
-                    sma120 = calSMA(stockAllDate, key, 120)
-                if(key >= 239)
-                    sma240 = calSMA(stockAllDate, key, 240)
-                
-                ystSma5 = sma5;
-                ystSma10 = sma10;
-                ystSma20 = sma20;
-                ystAllBuyCond = buyCond1 && buyCond2 && buyCond3;
-                await stocksCol.updateOne(query, 
-                    { $set: { 
-                        sma5: sma5, 
-                        sma10: sma10, 
-                        sma20: sma20, 
-                        sma60: sma60, 
-                        sma120: sma120, 
-                        sma240: sma240,
-                        buyCond1: buyCond1,
-                        buyCond2: buyCond2,
-                        buyCond3: buyCond3,
-                        buyCond4: buyCond4,
-                    }})
-                
+                console.log(row.name + " over")
             }
-            console.log(row.name + " over")
+        }
+        
+        if(targetObj.FTX){
+            // 找TxList
+            const dbTxList = await txCol.find().toArray()
+
+            const TxList = dbTxList.filter(item => item.code === "TX")
+            const MtxList = dbTxList.filter(item => item.code === "MTX")
+            TxList.sort((a, b) => a.date > b.date ? 1 : (a.date < b.date ? -1 : 0))
+            MtxList.sort((a, b) => a.date > b.date ? 1 : (a.date < b.date ? -1 : 0))
+            for(var i = 0 ; i < TxList.length; i++){
+                const Txquery = {_id: TxList[i]['_id']}
+                const Mtxquery = {_id: MtxList[i]['_id']}
+                var txSma5 = mtxSma5 = txSma10 = mtxSma10 = txSma20 = mtxSma20 = null;
+                var txSma60 = mtxSma60 = txSma120 = mtxSma120 = txSma240 = mtxSma240 = null;
+
+                if (i >= 4){
+                    txSma5 = calSMA(TxList, i, 5)
+                    mtxSma5 = calSMA(MtxList, i, 5)
+                }
+                if(i >= 9){
+                    txSma10 = calSMA(TxList, i, 10)
+                    mtxSma10 = calSMA(MtxList, i, 10)
+                }
+                if(i >= 19){
+                    txSma20 = calSMA(TxList, i, 20)
+                    mtxSma20 = calSMA(MtxList, i, 20)
+                }
+                if(i >= 59){
+                    txSma60 = calSMA(TxList, i, 60)
+                    mtxSma60 = calSMA(MtxList, i, 60)
+                }
+                if(i >= 119){
+                    txSma120 = calSMA(TxList, i, 120)
+                    mtxSma120 = calSMA(MtxList, i, 120)
+                }
+                if(i >= 239){
+                    txSma240 = calSMA(TxList, i, 240)
+                    mtxSma240 = calSMA(MtxList, i, 240)
+                }
+                
+                await txCol.updateOne(Txquery, 
+                    { $set: { 
+                        sma5: txSma5, 
+                        sma10: txSma10, 
+                        sma20: txSma20, 
+                        sma60: txSma60, 
+                        sma120: txSma120, 
+                        sma240: txSma240
+                    }})
+                await txCol.updateOne(Mtxquery,
+                    { $set: { 
+                        sma5: mtxSma5, 
+                        sma10: mtxSma10, 
+                        sma20: mtxSma20, 
+                        sma60: mtxSma60, 
+                        sma120: mtxSma120, 
+                        sma240: mtxSma240
+                    }})
+            }
+            console.log("FTX over")
         }
     }
     
@@ -208,7 +271,6 @@
             //整理當天資料
             const allData = response.map(item => {
                 const row = item.split(',')
-                console.log(row)
                 if(row[0]){
                     return {
                         code: row[1],
@@ -217,7 +279,7 @@
                         open: row[3],
                         high: row[4],
                         low: row[5],
-                        close: row[10],
+                        close: row[10] !== '0' ? row[10] : row[6],
                         volumn: row[9]
                     }
                 }else{
@@ -262,7 +324,7 @@
     }
 
     // 範圍日期爬取盤後數據
-    const requestRange = async(targetList, startDate, endDate) =>{
+    const requestRange = async(targetObj, startDate, endDate) =>{
         // date array
         const start = moment.utc(startDate)
         const end = moment.utc(endDate)
@@ -271,11 +333,11 @@
 
             console.log(now.format("YYYYMMDD") + "-start");
 
-            if(targetList.indexOf("TWE") !== -1){
+            if(targetObj.TWE){
                 await requestTwe(now.format("YYYYMMDD"))
             }
 
-            if(targetList.indexOf("FTX") !== -1){
+            if(targetObj.FTX){
                 await requestFTX("TX", now.format("YYYYMMDD"))
                 await requestFTX("MTX", now.format("YYYYMMDD"))
             }
@@ -285,12 +347,10 @@
             now = now.add(1, 'd');
         }
 
-        if(targetList.indexOf("TWE") !== -1){
-            await freshSMA();
-        }
+        await freshSMA(targetObj);
     }
 
-    // 已擷取2019-01-01 至 2021-05-06
-    await requestRange(["FTX"], "20190619", "20190619");
+    // 已擷取2018-08-01 至 2021-05-07
+    await requestRange({FTX: true, TWE: true}, "20180801", "20181231");
     await client.close();
 })()
