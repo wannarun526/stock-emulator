@@ -8,6 +8,7 @@
     const db = client.db('stocks');
     const stockListCol = db.collection("stockList");
     const stocksCol = db.collection("stocks");
+    const txCol = db.collection("TX");
     
     // 股價文字轉為float
     const transferToDecimal = (inputStr) => {
@@ -179,9 +180,89 @@
             console.log(row.name + " over")
         }
     }
+    
+    //爬取台指期每日盤後數據
+    const requestFTX = async (product, inputData) =>{
+        const ftxUrl = "https://www.taifex.com.tw/cht/3/dlFutDataDown"
+        const dateMoment = moment.utc(inputData)
+        const date = dateMoment.format("YYYY/MM/DD")
+        const yearMonthThis = dateMoment.format("YYYYMM")
+        const yearMonthNext = moment.utc(inputData).add(1, "M").format("YYYYMM")
+        let response = await request({
+            url: ftxUrl,
+            method: "POST",
+            form: {
+                down_type: 1,
+                commodity_id: product,
+                queryStartDate: date,
+                queryEndDate: date,
+            }
+        })
+        response = response.split("\n").slice(1);
 
-    // 範圍日期爬取上市上櫃資料
-    const requestRange = async(startDate, endDate) =>{
+        // 有開市有資料 => 下一步
+        if(response[0] ){
+            // 找TXList
+            const TXList = await txCol.find().toArray()
+
+            //整理當天資料
+            const allData = response.map(item => {
+                const row = item.split(',')
+                console.log(row)
+                if(row[0]){
+                    return {
+                        code: row[1],
+                        name: row[1] + row[2].trim(),
+                        month: row[2].trim(),
+                        open: row[3],
+                        high: row[4],
+                        low: row[5],
+                        close: row[10],
+                        volumn: row[9]
+                    }
+                }else{
+                    return null
+                }
+            })
+
+            const monthThis = allData.filter(item => item && item.month === yearMonthThis);
+            const monthNext = allData.filter(item => item && item.month === yearMonthNext);
+
+            const todayData = monthThis.length > 0 ? monthThis : monthNext;
+
+            const dayData = todayData.find(item => item.close.indexOf("-") === -1)
+            const nightData = todayData.find(item => item.close.indexOf("-") !== -1)
+            //data[0] - 交易日期
+            //data[1] - 契約
+            //data[2] - 到期月份(週別)
+            //data[3] - 開盤價
+            //data[4] - 最高價
+            //data[5] - 最低價
+            //data[6] - 收盤價
+            //data[9] - 成交量
+            
+            if(!TXList.find((item)=> item.code === dayData.code && item.name === dayData.name && moment.utc(inputData).isSame(item.date))){
+                const newData = {
+                    code: dayData.code,
+                    name: dayData.name,
+                    date: dateMoment.toDate(),
+                    open: transferToDecimal(nightData.open),
+                    high: Math.max(dayData.high, nightData.high),
+                    low: Math.min(dayData.low, nightData.low),
+                    close: transferToDecimal(dayData.close),
+                    dayVolumn: transferToDecimal(dayData.volumn),
+                    nightVolumn: transferToDecimal(nightData.volumn),
+                    totalVolumn: transferToDecimal(dayData.volumn) + transferToDecimal(nightData.volumn)
+                }
+
+                await txCol.insertOne(newData)
+            }
+        }
+        console.log(date + '-over');
+    }
+
+    // 範圍日期爬取盤後數據
+    const requestRange = async(targetList, startDate, endDate) =>{
         // date array
         const start = moment.utc(startDate)
         const end = moment.utc(endDate)
@@ -189,17 +270,27 @@
         while (now.isSameOrBefore(end) ){
 
             console.log(now.format("YYYYMMDD") + "-start");
-            await requestTwe(now.format("YYYYMMDD"))
+
+            if(targetList.indexOf("TWE") !== -1){
+                await requestTwe(now.format("YYYYMMDD"))
+            }
+
+            if(targetList.indexOf("FTX") !== -1){
+                await requestFTX("TX", now.format("YYYYMMDD"))
+                await requestFTX("MTX", now.format("YYYYMMDD"))
+            }
+            
             //停止秒數防止過度擷取
-            await new Promise(resolve => setTimeout(resolve, 3 * 1000));
+            await new Promise(resolve => setTimeout(resolve, 5 * 1000));
             now = now.add(1, 'd');
         }
+
+        if(targetList.indexOf("TWE") !== -1){
+            await freshSMA();
+        }
     }
-    
-    // 已擷取2019-01-01 至 2021-04-19
-    await requestRange("20210420", "20210422");
 
-    await freshSMA();
-
+    // 已擷取2019-01-01 至 2021-05-06
+    await requestRange(["FTX"], "20190619", "20190619");
     await client.close();
 })()
