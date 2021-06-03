@@ -3,12 +3,12 @@
     const {MongoClient} = require('mongodb');
     const  moment = require('moment');
     const uri = "mongodb://yunshanghong:password@localhost:27017";
-    const client = await new MongoClient(uri).connect()
+    const client = await new MongoClient(uri, { useUnifiedTopology: true }).connect()
     
     const db = client.db('stocks');
-    const stockListCol = db.collection("stockList");
+    const stockListCol = db.collection("stockNames");
     const stocksCol = db.collection("stocks");
-    const txCol = db.collection("TX");
+    const txCol = db.collection("txs");
     
     // 股價文字轉為float
     const transferToDecimal = (inputStr) => {
@@ -291,7 +291,7 @@
             const monthNext = allData.filter(item => item && item.month === yearMonthNext);
 
             const todayData = monthThis.length > 0 ? monthThis : monthNext;
-
+            
             const dayData = todayData.find(item => item.close.indexOf("-") === -1)
             const nightData = todayData.find(item => item.close.indexOf("-") !== -1)
             //data[0] - 交易日期
@@ -308,13 +308,13 @@
                     code: dayData.code,
                     name: dayData.name,
                     date: dateMoment.toDate(),
-                    open: transferToDecimal(nightData.open),
-                    high: Math.max(dayData.high, nightData.high),
-                    low: Math.min(dayData.low, nightData.low),
+                    open: transferToDecimal(nightData ? nightData.open : dayData.open),
+                    high: Math.max(dayData.high, nightData ? nightData.high : dayData.high),
+                    low: Math.min(dayData.low, nightData ? nightData.low : dayData.low),
                     close: transferToDecimal(dayData.close),
                     dayVolumn: transferToDecimal(dayData.volumn),
-                    nightVolumn: transferToDecimal(nightData.volumn),
-                    totalVolumn: transferToDecimal(dayData.volumn) + transferToDecimal(nightData.volumn)
+                    nightVolumn: transferToDecimal(nightData ? nightData.volumn : dayData.volumn),
+                    totalVolumn: transferToDecimal(dayData.volumn) + transferToDecimal(nightData ? nightData.volumn : dayData.volumn)
                 }
 
                 await txCol.insertOne(newData)
@@ -350,7 +350,27 @@
         await freshSMA(targetObj);
     }
 
-    // 已擷取2018-08-01 至 2021-05-07
-    await requestRange({FTX: true, TWE: true}, "20180801", "20181231");
+    const requestInstitute = async(product, inputData) => {
+        const url = "https://www.taifex.com.tw/cht/3/futContractsDateDown"
+        const date = moment.utc(inputData).format("YYYY/MM/DD")
+
+        let response = await request({
+            url: url,
+            method: "POST",
+            form: {
+                commodityId: product,
+                queryStartDate: date,
+                queryEndDate: date
+            }
+        })
+        //有資料 => 下一步
+        if(response.indexOf("html") === -1){
+            response = response.split("\n").slice(1);
+            console.log(response)
+        }
+    }
+    // 已擷取2016-01-02 至 2021-06-03
+    await requestRange({FTX: true, TWE: true}, "20210603", "20210603");
+    // await requestInstitute("TXF", "20210507");
     await client.close();
 })()
