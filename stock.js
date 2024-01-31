@@ -178,7 +178,7 @@
     }
 
     const targetObj = { FTX: true };
-    // 擷取資料 20210101 ~ 20220101
+    // 擷取資料 20200101 ~ 20240101
     await requestRange(targetObj, "20200101", "20210101");
 
     // 整理資料
