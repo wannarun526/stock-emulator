@@ -31,7 +31,7 @@
 
                 if (index >= 4) sma5 = calSMA(MtxList, index, 5)
 
-                if(index >= 10) sma11 = calSMA(MtxList, index, 11)
+                if (index >= 10) sma11 = calSMA(MtxList, index, 11)
 
                 await txCol.updateOne({ _id: item['_id'] }, { $set: { sma5, sma11 }} )
             })
@@ -107,8 +107,8 @@
 
     }
 
-    // 分析策略 1百分比
-    const startOnePercent = async() => {
+    // 分析策略 X 百分比
+    const startPercent = async(percent = 9999999999) => {
         // 找TxList
         const dbTxList = await txCol.find().sort({ date: 1 }).toArray();
 
@@ -131,7 +131,7 @@
                     tradeList.push({
                         buyDate: item.date,
                         buyPrice: item.close,
-                        buyGoalPrice: Math.ceil(Math.ceil(item.close * 1.14)/ 10) * 10,
+                        buyGoalPrice: Math.ceil(Math.ceil(item.close * percent)/ 10) * 10,
                         sellDate: null,
                         sellPrice: 0,
                         profit: 0,
@@ -179,16 +179,13 @@
 
     const targetObj = { FTX: true };
     // 擷取資料 20210101 ~ 20220101
-    // await requestRange(targetObj, "20210101", "20220101");
+    await requestRange(targetObj, "20200101", "20210101");
 
     // 整理資料
-    // await freshSMA(targetObj);
+    await freshSMA(targetObj);
 
-    // 分析策略 1百分比
-    await startOnePercent();
-
-    // 分析策略 均線交叉
-    // await startCross();
+    // 分析策略 X 百分比
+    // await startPercent(1.01);
 
     await client.close();
 })()
