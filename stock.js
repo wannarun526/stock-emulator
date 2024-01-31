@@ -5,57 +5,42 @@
     const uri = "mongodb://localhost:27017";
     const client = await new MongoClient(uri, { useUnifiedTopology: true }).connect()
     const db = client.db('stocks');
-    const stockListCol = db.collection("stockNames");
-    const stocksCol = db.collection("stocks");
     const txCol = db.collection("txs");
 
-    // 股價文字轉為float
-    const transferToDecimal = (inputStr) => {
-        const result = parseFloat(inputStr.replace(/[,]/g, ""))
-        return result ? result : 0;
-    }
     // 計算SMA
-    const calSMA = (inputList, updateIndex, day)=>{
+    const calSMA = (inputList, updateIndex, day) => {
         var total = 0;
 
         for(var i = 0; i < day; i++){
             total += inputList[updateIndex - i ]['close']
         }
 
-        return Math.round( (total / day) * 100) / 100;
+        return Math.round(total / day);
     }
 
     // 整理各股資料
-    const freshSMA = async(targetObj) =>{
+    const freshSMA = async(targetObj) => {
 
         if(targetObj.FTX){
             // 找TxList
-            const dbTxList = await txCol.find().toArray()
+            const dbTxList = await txCol.find().sort({ date: 1 }).toArray()
 
             const MtxList = dbTxList.filter(item => item.futures_id === "MTX")
-            MtxList.sort((a, b) => a.date > b.date ? 1 : (a.date < b.date ? -1 : 0))
-            for(var i = 0 ; i < MtxList.length; i++){
-                const Mtxquery = {_id: MtxList[i]['_id']}
-                var mtxSma5 = mtxSma11= null;
+            MtxList.forEach(async (item, index) => {
+                let sma5 = sma11 = null;
 
-                if (i >= 4){
-                    mtxSma5 = calSMA(MtxList, i, 5)
-                }
-                if(i >= 10){
-                    mtxSma11 = calSMA(MtxList, i, 11)
-                }
-                await txCol.updateOne(Mtxquery,
-                    { $set: {
-                        sma5: mtxSma5,
-                        sma11: mtxSma11,
-                    }})
-            }
+                if (index >= 4) sma5 = calSMA(MtxList, index, 5)
+
+                if(index >= 10) sma11 = calSMA(MtxList, index, 11)
+
+                await txCol.updateOne({ _id: item['_id'] }, { $set: { sma5, sma11 }} )
+            })
             console.log("FTX over")
         }
     }
 
     //爬取台指期每日盤後數據
-    const requestFTX = async (product, inputDate) =>{
+    const requestFTX = async (product, inputDate) => {
         const ftxUrl = "https://api.finmindtrade.com/api/v4/data"
         const dateMoment = moment.utc(inputDate);
         const yearMonthThis = dateMoment.format("YYYYMM");
@@ -77,14 +62,14 @@
             item.date === inputDate
         );
 
+        const positionData = dataList.find(item => item.trading_session === "position");
+        const afterData = dataList.find(item => item.trading_session === "after_market");
+
 
         // 有開市有資料 => 下一步
-        if(dataList.length ){
+        if(positionData && afterData) {
             // 找TXList
             const TXList = await txCol.find().toArray();
-
-            const positionData = dataList.find(item => item.trading_session === "position");
-            const afterData = dataList.find(item => item.trading_session === "after_market");
 
             const newData = {
                 date: inputDate,
@@ -104,7 +89,7 @@
     }
 
     // 範圍日期爬取盤後數據
-    const requestRange = async(targetObj, startDate, endDate) =>{
+    const requestRange = async(targetObj, startDate, endDate) => {
         // date array
         const start = moment.utc(startDate)
         const end = moment.utc(endDate)
@@ -122,14 +107,88 @@
 
     }
 
+    // 分析策略 1百分比
+    const startOnePercent = async() => {
+        // 找TxList
+        const dbTxList = await txCol.find().sort({ date: 1 }).toArray();
+
+        const MtxList = dbTxList.filter(item => item.futures_id === "MTX");
+
+        const tradeList = [];
+
+        MtxList.forEach((item, index) => {
+            const yesterdayItem = MtxList[index - 1];
+            const lastTrade = tradeList[tradeList.length - 1];
+
+            if(!lastTrade || (lastTrade.buyDate && lastTrade.sellDate)){
+                // 未買入
+                if(
+                    item.sma5 && item.sma11 && yesterdayItem &&
+                    item.sma5 > item.sma11 &&
+                    yesterdayItem.sma5 <= yesterdayItem.sma11
+                ){
+                    // 突破 => 買入
+                    tradeList.push({
+                        buyDate: item.date,
+                        buyPrice: item.close,
+                        buyGoalPrice: Math.ceil(Math.ceil(item.close * 1.14)/ 10) * 10,
+                        sellDate: null,
+                        sellPrice: 0,
+                        profit: 0,
+                    })
+                }
+                return;
+            }
+
+            if(lastTrade?.buyDate && !lastTrade?.sellDate){
+                // 已買入未售出
+                if(
+                    item.sma5 && item.sma11 && yesterdayItem &&
+                    item.max >= lastTrade.buyGoalPrice
+                ){
+                    // 達到 1% 目標 => 獲利售出
+                    tradeList[tradeList.length - 1].sellDate = item.date;
+                    tradeList[tradeList.length - 1].sellPrice = lastTrade.buyGoalPrice;
+                    tradeList[tradeList.length - 1].profit = lastTrade.buyGoalPrice - lastTrade.buyPrice;
+                    return;
+                }
+
+                if(
+                    item.sma5 && item.sma11 && yesterdayItem &&
+                    item.sma5 < item.sma11 &&
+                    yesterdayItem.sma5 >= yesterdayItem.sma11
+                ){
+                    // 交叉 => 賠錢售出
+                    tradeList[tradeList.length - 1].sellDate = item.date;
+                    tradeList[tradeList.length - 1].sellPrice = item.close;
+                    tradeList[tradeList.length - 1].profit = item.close - lastTrade.buyPrice;
+                    return;
+                }
+
+            }
+        })
+
+        const winList = tradeList.filter(trade => trade.profit > 0);
+        const totalProfit = winList.map(trade => trade.profit).reduce((a, b) => a + b );
+        console.log("tradeList 111:", tradeList);
+        console.log("total times 111:", tradeList.length);
+        console.log("win times 111:", winList.length);
+        console.log("total profit 111:", totalProfit);
+        console.log("expectation 111:", totalProfit / tradeList.length);
+    }
+
     const targetObj = { FTX: true };
-    // 擷取資料
-    await requestRange(targetObj, "20240101", "20240128");
+    // 擷取資料 20210101 ~ 20220101
+    // await requestRange(targetObj, "20210101", "20220101");
 
     // 整理資料
-    await freshSMA(targetObj);
+    // await freshSMA(targetObj);
+
+    // 分析策略 1百分比
+    await startOnePercent();
+
+    // 分析策略 均線交叉
+    // await startCross();
 
     await client.close();
-
-
 })()
